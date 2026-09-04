@@ -481,6 +481,20 @@ class TestToyotaAlwaysOnLateralBase(TestToyotaSafetyBase):
     self._rx(self._user_brake_msg(0))
     self.assertTrue(self._tx(self._always_on_lateral_cmd_msg()))
 
+  def test_always_on_lateral_while_braking(self):
+    # opt-in: the brake no longer blocks; the main switch and the base flag still do
+    self._enable_always_on_lateral()
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL | ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL_WHILE_BRAKING)
+    self._rx(self._pcm_cruise_2_msg(1))
+    self._rx(self._user_brake_msg(1))
+    self.assertTrue(self._tx(self._always_on_lateral_cmd_msg()))
+    self._rx(self._pcm_cruise_2_msg(0))
+    self.assertFalse(self._tx(self._always_on_lateral_cmd_msg()))
+    # the braking bit alone allows nothing
+    self._rx(self._pcm_cruise_2_msg(1))
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL_WHILE_BRAKING)
+    self.assertFalse(self._tx(self._always_on_lateral_cmd_msg()))
+
   def test_always_on_lateral_limits_still_apply(self):
     self._enable_always_on_lateral()
     self._rx(self._pcm_cruise_2_msg(1))

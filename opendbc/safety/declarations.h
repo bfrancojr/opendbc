@@ -322,8 +322,13 @@ extern CurvatureSteeringState curvature_state;
 
 // This flag allows lateral actuation while the stock ACC main switch is on, even when
 // openpilot is not engaged (controls_allowed is false). It only has an effect in safety
-// modes that populate acc_main_on, and a pressed brake blocks it.
+// modes that populate acc_main_on. A pressed brake blocks it unless
+// ALT_EXP_ALWAYS_ON_LATERAL_WHILE_BRAKING is also set.
 #define ALT_EXP_ALWAYS_ON_LATERAL 32
+
+// With ALT_EXP_ALWAYS_ON_LATERAL, keep allowing lateral actuation while the brake is pressed.
+// Without it, braking blocks always-on lateral the way it disengages openpilot.
+#define ALT_EXP_ALWAYS_ON_LATERAL_WHILE_BRAKING 64
 
 extern int alternative_experience;
 

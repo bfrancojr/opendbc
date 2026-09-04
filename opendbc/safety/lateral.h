@@ -1,9 +1,11 @@
 #include "opendbc/safety/declarations.h"
 
 static bool get_lateral_allowed(void) {
-  // always-on lateral: also allowed while the stock ACC main switch is on and the brake isn't pressed
+  // always-on lateral: also allowed while the stock ACC main switch is on and, unless the
+  // driver opted into steering through braking, the brake isn't pressed
   const bool always_on_lateral = (alternative_experience & ALT_EXP_ALWAYS_ON_LATERAL) != 0;
-  return controls_allowed || (always_on_lateral && acc_main_on && !brake_pressed);
+  const bool while_braking = (alternative_experience & ALT_EXP_ALWAYS_ON_LATERAL_WHILE_BRAKING) != 0;
+  return controls_allowed || (always_on_lateral && acc_main_on && (!brake_pressed || while_braking));
 }
 
 // ISO 11270
