@@ -104,6 +104,7 @@ static bool is_msg_valid(RxCheck addr_list[], int index) {
     if (!addr_list[index].status.valid_checksum || !addr_list[index].status.valid_quality_flag || (addr_list[index].status.wrong_counters >= MAX_WRONG_COUNTERS)) {
       valid = false;
       controls_allowed = false;
+      acc_main_on = false;
     }
   }
   return valid;
@@ -338,6 +339,7 @@ void safety_tick(const safety_config *cfg) {
       if (lagging || frequency_invalid || !is_msg_valid(cfg->rx_checks, i)) {
         rx_checks_invalid = true;
         controls_allowed = false;
+        acc_main_on = false;
       }
     }
   }

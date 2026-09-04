@@ -56,6 +56,8 @@ class ToyotaSafetyFlags(IntFlag):
   STOCK_LONGITUDINAL = (2 << 8)
   LTA = (4 << 8)
   SECOC = (8 << 8)
+  # check PCM_CRUISE_2 (0x1D3) for the ACC main switch, used by always-on lateral. Not sent by UNSUPPORTED_DSU cars
+  ACC_MAIN_ON = (16 << 8)
 
 
 class ToyotaFlags(IntFlag):

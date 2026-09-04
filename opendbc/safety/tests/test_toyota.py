@@ -6,6 +6,7 @@ import itertools
 
 from opendbc.car.toyota.values import ToyotaSafetyFlags
 from opendbc.car.structs import CarParams
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
 from opendbc.safety.tests.common import CANPackerSafety
@@ -77,6 +78,18 @@ class TestToyotaSafetyBase(common.CarSafetyTest, common.LongitudinalAccelSafetyT
   def _pcm_status_msg(self, enable):
     values = {"CRUISE_ACTIVE": enable}
     return self.packer.make_can_msg_safety("PCM_CRUISE", 0, values)
+
+  def _pcm_cruise_2_msg(self, main_on):
+    values = {"MAIN_ON": main_on}
+    return self.packer.make_can_msg_safety("PCM_CRUISE_2", 0, values)
+
+  def test_always_on_lateral_requires_flag(self):
+    """PCM_CRUISE_2 is only checked with the ACC_MAIN_ON safety param, so the alt experience is inert without it"""
+    flag_set = bool(self.safety.get_current_safety_param() & ToyotaSafetyFlags.ACC_MAIN_ON)
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL)
+    self.safety.set_controls_allowed(False)
+    self._rx(self._pcm_cruise_2_msg(1))
+    self.assertEqual(flag_set, self.safety.get_acc_main_on())
 
   def test_diagnostics(self, stock_longitudinal: bool = False, ecu_disabled: bool = True):
     for should_tx, msg in ((False, b"\x6D\x02\x3E\x00\x00\x00\x00\x00"),  # fwdCamera tester present
@@ -374,6 +387,16 @@ class TestToyotaSecOcSafetyBase(TestToyotaSafetyBase):
   def _accel_msg(self, accel, cancel_req=0):
     return self._accel_msg_183(accel)
 
+  def test_always_on_lateral_flag_ignored(self):
+    """SecOC cars don't use PCM_CRUISE_2, so the ACC_MAIN_ON safety param does nothing"""
+    self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, self.safety.get_current_safety_param() | ToyotaSafetyFlags.ACC_MAIN_ON)
+    self.safety.init_tests()
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL)
+    self.safety.set_controls_allowed(False)
+    self._rx(self._pcm_cruise_2_msg(1))
+    self.assertFalse(self.safety.get_acc_main_on())
+    self.assertFalse(self._tx(self._torque_cmd_msg(10)))
+
 
 class TestToyotaSecOcSafetyStockLongitudinal(TestToyotaSecOcSafetyBase, TestToyotaStockLongitudinalBase):
 
@@ -415,3 +438,114 @@ class TestToyotaSecOcSafety(TestToyotaSecOcSafetyBase):
 
 if __name__ == "__main__":
   unittest.main()
+
+
+class TestToyotaAlwaysOnLateralBase(TestToyotaSafetyBase):
+  """
+  Always-on lateral: with ALT_EXP_ALWAYS_ON_LATERAL and the ACC_MAIN_ON safety param, lateral
+  actuation is allowed while the ACC main switch is on and the brake isn't pressed, without
+  controls_allowed. Subclasses provide a minimal good and bad actuation message for their steering mode.
+  """
+
+  def _always_on_lateral_cmd_msg(self):
+    raise NotImplementedError
+
+  def _always_on_lateral_bad_cmd_msg(self):
+    raise NotImplementedError
+
+  def _enable_always_on_lateral(self):
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL)
+    self.safety.set_controls_allowed(False)
+
+  def test_always_on_lateral_follows_acc_main(self):
+    self._enable_always_on_lateral()
+    for main_on in (0, 1, 0, 1):
+      self._rx(self._pcm_cruise_2_msg(main_on))
+      self.assertEqual(bool(main_on), self.safety.get_acc_main_on())
+      self.assertFalse(self.safety.get_controls_allowed())
+      self.assertEqual(bool(main_on), self._tx(self._always_on_lateral_cmd_msg()))
+
+  def test_always_on_lateral_requires_alt_experience(self):
+    self._enable_always_on_lateral()
+    self._rx(self._pcm_cruise_2_msg(1))
+    self.assertTrue(self.safety.get_acc_main_on())
+    self.assertTrue(self._tx(self._always_on_lateral_cmd_msg()))
+    self.safety.set_alternative_experience(0)
+    self.assertFalse(self._tx(self._always_on_lateral_cmd_msg()))
+
+  def test_always_on_lateral_brake_blocks(self):
+    self._enable_always_on_lateral()
+    self._rx(self._pcm_cruise_2_msg(1))
+    self._rx(self._user_brake_msg(1))
+    self.assertFalse(self._tx(self._always_on_lateral_cmd_msg()))
+    self._rx(self._user_brake_msg(0))
+    self.assertTrue(self._tx(self._always_on_lateral_cmd_msg()))
+
+  def test_always_on_lateral_limits_still_apply(self):
+    self._enable_always_on_lateral()
+    self._rx(self._pcm_cruise_2_msg(1))
+    self.assertTrue(self._tx(self._always_on_lateral_cmd_msg()))
+    self.assertFalse(self._tx(self._always_on_lateral_bad_cmd_msg()))
+
+  def test_always_on_lateral_invalid_rx_blocks(self):
+    # an invalid checked message clears acc_main_on, like it clears controls_allowed
+    self._enable_always_on_lateral()
+    self._rx(self._pcm_cruise_2_msg(1))
+    self.assertTrue(self._tx(self._always_on_lateral_cmd_msg()))
+    msg = self._torque_meas_msg(0)
+    msg[0].data[7] = (msg[0].data[7] + 1) % 256  # break the checksum
+    self.assertFalse(self._rx(msg))
+    self.assertFalse(self.safety.get_acc_main_on())
+    self.assertFalse(self._tx(self._always_on_lateral_cmd_msg()))
+
+  def test_always_on_lateral_rx_timeout_blocks(self):
+    self._enable_always_on_lateral()
+    self._rx(self._pcm_cruise_2_msg(1))
+    self.assertTrue(self._tx(self._always_on_lateral_cmd_msg()))
+    self.safety.set_timer(int(2e6))
+    self.safety.safety_tick_current_safety_config()
+    self.assertFalse(self.safety.get_acc_main_on())
+    self.assertFalse(self._tx(self._always_on_lateral_cmd_msg()))
+
+
+class TestToyotaSafetyTorqueAlwaysOnLateral(TestToyotaAlwaysOnLateralBase, TestToyotaSafetyTorque):
+
+  def setUp(self):
+    self.packer = CANPackerSafety("toyota_nodsu_pt_generated")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, self.EPS_SCALE | ToyotaSafetyFlags.ACC_MAIN_ON)
+    self.safety.init_tests()
+
+  def _always_on_lateral_cmd_msg(self):
+    self._set_prev_torque(0)
+    return self._torque_cmd_msg(self.MAX_RATE_UP)
+
+  def _always_on_lateral_bad_cmd_msg(self):
+    self._set_prev_torque(0)
+    return self._torque_cmd_msg(self.MAX_RATE_UP + 1)
+
+
+class TestToyotaAltBrakeSafetyAlwaysOnLateral(TestToyotaAltBrakeSafety, TestToyotaSafetyTorqueAlwaysOnLateral):
+
+  def setUp(self):
+    self.packer = CANPackerSafety("toyota_new_mc_pt_generated")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, self.EPS_SCALE | ToyotaSafetyFlags.ALT_BRAKE | ToyotaSafetyFlags.ACC_MAIN_ON)
+    self.safety.init_tests()
+
+
+class TestToyotaSafetyAngleAlwaysOnLateral(TestToyotaAlwaysOnLateralBase, TestToyotaSafetyAngle):
+
+  def setUp(self):
+    self.packer = CANPackerSafety("toyota_nodsu_pt_generated")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, self.EPS_SCALE | ToyotaSafetyFlags.LTA | ToyotaSafetyFlags.ACC_MAIN_ON)
+    self.safety.init_tests()
+
+  def _always_on_lateral_cmd_msg(self):
+    self._set_prev_desired_angle(0)
+    return self._angle_cmd_msg(0, enabled=True)
+
+  def _always_on_lateral_bad_cmd_msg(self):
+    self._set_prev_desired_angle(0)
+    return self._angle_cmd_msg(self.STEER_ANGLE_MAX, enabled=True)

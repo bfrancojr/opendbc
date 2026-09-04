@@ -320,6 +320,11 @@ extern CurvatureSteeringState curvature_state;
 // This flag allows AEB to be commanded from openpilot.
 #define ALT_EXP_ALLOW_AEB 16
 
+// This flag allows lateral actuation while the stock ACC main switch is on, even when
+// openpilot is not engaged (controls_allowed is false). It only has an effect in safety
+// modes that populate acc_main_on, and a pressed brake blocks it.
+#define ALT_EXP_ALWAYS_ON_LATERAL 32
+
 extern int alternative_experience;
 
 // time since safety mode has been changed

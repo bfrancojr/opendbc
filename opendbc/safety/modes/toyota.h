@@ -50,6 +50,9 @@
   {.msg = {{0x1D2, 0, 8, 33U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                           \
   {.msg = {{0x224, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
 
+#define TOYOTA_ACC_MAIN_ON_RX_CHECKS                                                                                                       \
+  {.msg = {{0x1D3, 0, 8, 33U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                           \
+
 #define TOYOTA_SECOC_RX_CHECKS                                                                                                             \
   TOYOTA_COMMON_RX_CHECKS(false)                                                                                                           \
   {.msg = {{0x176, 0, 8, 32U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                           \
@@ -60,6 +63,7 @@ static bool toyota_secoc = false;
 static bool toyota_alt_brake = false;
 static bool toyota_stock_longitudinal = false;
 static bool toyota_lta = false;
+static bool toyota_acc_main_on = false;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
@@ -146,6 +150,11 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         bool cruise_engaged = GET_BIT(msg, 5U);  // PCM_CRUISE.CRUISE_ACTIVE
         pcm_cruise_check(cruise_engaged);
         gas_pressed = !GET_BIT(msg, 4U);  // PCM_CRUISE.GAS_RELEASED
+      }
+      // ACC main switch, for always-on lateral. Only checked with the flag set, since
+      // UNSUPPORTED_DSU cars don't send PCM_CRUISE_2
+      if (toyota_acc_main_on && (msg->addr == 0x1D3U)) {
+        acc_main_on = GET_BIT(msg, 15U);  // PCM_CRUISE_2.MAIN_ON
       }
       if (!toyota_alt_brake && (msg->addr == 0x226U)) {
         brake_pressed = GET_BIT(msg, 37U);  // BRAKE_MODULE.BRAKE_PRESSED (toyota_nodsu_pt_generated.dbc)
@@ -376,6 +385,7 @@ static safety_config toyota_init(uint16_t param) {
   const uint32_t TOYOTA_PARAM_ALT_BRAKE = 1UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_STOCK_LONGITUDINAL = 2UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_LTA = 4UL << TOYOTA_PARAM_OFFSET;
+  const uint32_t TOYOTA_PARAM_ACC_MAIN_ON = 16UL << TOYOTA_PARAM_OFFSET;
 
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
@@ -385,6 +395,7 @@ static safety_config toyota_init(uint16_t param) {
   toyota_alt_brake = GET_FLAG(param, TOYOTA_PARAM_ALT_BRAKE);
   toyota_stock_longitudinal = GET_FLAG(param, TOYOTA_PARAM_STOCK_LONGITUDINAL);
   toyota_lta = GET_FLAG(param, TOYOTA_PARAM_LTA);
+  toyota_acc_main_on = GET_FLAG(param, TOYOTA_PARAM_ACC_MAIN_ON);
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;
@@ -413,8 +424,16 @@ static safety_config toyota_init(uint16_t param) {
     static RxCheck toyota_lta_rx_checks[] = {
       TOYOTA_RX_CHECKS(true)
     };
+    static RxCheck toyota_lta_acc_main_on_rx_checks[] = {
+      TOYOTA_RX_CHECKS(true)
+      TOYOTA_ACC_MAIN_ON_RX_CHECKS
+    };
 
-    SET_RX_CHECKS(toyota_lta_rx_checks, ret);
+    if (!toyota_acc_main_on) {
+      SET_RX_CHECKS(toyota_lta_rx_checks, ret);
+    } else {
+      SET_RX_CHECKS(toyota_lta_acc_main_on_rx_checks, ret);
+    }
   } else {
     static RxCheck toyota_lka_rx_checks[] = {
       TOYOTA_RX_CHECKS(false)
@@ -422,8 +441,22 @@ static safety_config toyota_init(uint16_t param) {
     static RxCheck toyota_lka_alt_brake_rx_checks[] = {
       TOYOTA_ALT_BRAKE_RX_CHECKS(false)
     };
+    static RxCheck toyota_lka_acc_main_on_rx_checks[] = {
+      TOYOTA_RX_CHECKS(false)
+      TOYOTA_ACC_MAIN_ON_RX_CHECKS
+    };
+    static RxCheck toyota_lka_alt_brake_acc_main_on_rx_checks[] = {
+      TOYOTA_ALT_BRAKE_RX_CHECKS(false)
+      TOYOTA_ACC_MAIN_ON_RX_CHECKS
+    };
 
-    if (!toyota_alt_brake) {
+    if (toyota_acc_main_on) {
+      if (!toyota_alt_brake) {
+        SET_RX_CHECKS(toyota_lka_acc_main_on_rx_checks, ret);
+      } else {
+        SET_RX_CHECKS(toyota_lka_alt_brake_acc_main_on_rx_checks, ret);
+      }
+    } else if (!toyota_alt_brake) {
       SET_RX_CHECKS(toyota_lka_rx_checks, ret);
     } else {
       SET_RX_CHECKS(toyota_lka_alt_brake_rx_checks, ret);
