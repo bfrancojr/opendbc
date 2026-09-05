@@ -170,15 +170,45 @@ class TestToyotaFingerprint(unittest.TestCase):
 
 
 class TestToyotaDisconnectedDsu(unittest.TestCase):
-  """openpilot longitudinal on TSS-P cars when the DSU is unplugged (restored from commaai/opendbc#2931).
-  The decision is made from the firmware query at every start: DSU answers -> stock longitudinal, DSU absent -> openpilot."""
+  """openpilot longitudinal on TSS-P cars when the DSU is unplugged (restored from commaai/opendbc#2931) or a smartDSU
+  is inline at the DSU. Decided at every start: DSU answers the fw query and no smartDSU -> stock longitudinal;
+  DSU absent -> openpilot with stand-in DSU messages; smartDSU (0x2FF on the bus) -> openpilot, DSU keeps AEB."""
   WITH_DSU = [Ecu.engine, Ecu.eps, Ecu.abs, Ecu.fwdRadar, Ecu.fwdCamera, Ecu.dsu]
   WITHOUT_DSU = [Ecu.engine, Ecu.eps, Ecu.abs, Ecu.fwdRadar, Ecu.fwdCamera]
 
   @staticmethod
-  def params(platform, ecus, docs=False):
+  def params(platform, ecus, docs=False, smart_dsu=False):
     car_fw = [CarParams.CarFw(ecu=ecu, fwVersion=b"", address=0x700, subAddress=0, brand="toyota") for ecu in ecus]
-    return interfaces[platform].get_params(platform, gen_empty_fingerprint(), car_fw, False, True, docs)
+    fingerprint = gen_empty_fingerprint()
+    if smart_dsu:
+      fingerprint[0][0x2FF] = 8
+    return interfaces[platform].get_params(platform, fingerprint, car_fw, False, True, docs)
+
+  @staticmethod
+  def sent_addresses(CP, frames=100):
+    CI = interfaces[CP.carFingerprint](CP)
+    CC = structs.CarControl().as_reader()
+    sent = set()
+    for frame in range(frames):
+      CI.update([])
+      _, can_sends = CI.apply(CC, int(frame * DT_CTRL * 1e9))
+      sent |= {msg[0] for msg in can_sends}  # (address, data, bus)
+    return sent
+
+  def test_sienna_smart_dsu_openpilot_longitudinal(self):
+    CP = self.params(CAR.TOYOTA_SIENNA, self.WITH_DSU, smart_dsu=True)
+    assert CP.flags & ToyotaFlags.SMART_DSU and not CP.enableDsu
+    assert CP.openpilotLongitudinalControl and CP.autoResumeSng and CP.minEnableSpeed < 0
+    assert not (CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
+    sent = self.sent_addresses(CP)
+    static = {addr for addr, cars, _, _, _ in STATIC_DSU_MSGS if CAR.TOYOTA_SIENNA in cars}
+    assert 0x343 in sent and not (static & sent), sorted(map(hex, sent))  # the real DSU is still there
+
+  def test_smart_dsu_ignored_where_the_dsu_does_not_do_long(self):
+    CP = self.params(CAR.TOYOTA_RAV4_TSS2, self.WITHOUT_DSU, smart_dsu=True)
+    assert not (CP.flags & ToyotaFlags.SMART_DSU) and CP.openpilotLongitudinalControl  # camera-based long, as before
+    CP = self.params(CAR.LEXUS_IS, self.WITH_DSU, smart_dsu=True)
+    assert not (CP.flags & ToyotaFlags.SMART_DSU) and not CP.openpilotLongitudinalControl
 
   def test_sienna_dsu_unplugged_openpilot_longitudinal(self):
     CP = self.params(CAR.TOYOTA_SIENNA, self.WITHOUT_DSU)
@@ -211,12 +241,6 @@ class TestToyotaDisconnectedDsu(unittest.TestCase):
     expected = {addr for addr, cars, _, _, _ in STATIC_DSU_MSGS if CAR.TOYOTA_SIENNA in cars}
     assert expected
     for ecus, should_send in ((self.WITHOUT_DSU, True), (self.WITH_DSU, False)):
-      CI = interfaces[CAR.TOYOTA_SIENNA](self.params(CAR.TOYOTA_SIENNA, ecus))
-      CC = structs.CarControl().as_reader()
-      sent = set()
-      for frame in range(100):
-        CI.update([])
-        _, can_sends = CI.apply(CC, int(frame * DT_CTRL * 1e9))
-        sent |= {msg[0] for msg in can_sends}  # (address, data, bus)
+      sent = self.sent_addresses(self.params(CAR.TOYOTA_SIENNA, ecus))
       assert (expected <= sent) == should_send, (ecus, sorted(map(hex, sent)))
       assert (0x343 in sent) == should_send  # ACC_CONTROL only when openpilot does long

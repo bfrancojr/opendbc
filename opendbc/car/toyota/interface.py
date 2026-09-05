@@ -54,9 +54,15 @@ class CarInterface(CarInterfaceBase):
     # In TSS2 cars, the camera does long control
     found_ecus = [fw.ecu for fw in car_fw]
 
-    # TSS-P cars: openpilot takes over longitudinal when the DSU is disconnected (absent from the fw query).
-    # TSS2 cars have no DSU (the camera does long) and UNSUPPORTED_DSU cars use the AEB message for long.
-    ret.enableDsu = len(found_ecus) > 0 and Ecu.dsu not in found_ecus and not (ret.flags & (ToyotaFlags.NO_DSU | ToyotaFlags.UNSUPPORTED_DSU))
+    # TSS-P cars only (TSS2 cars have no DSU, the camera does long; UNSUPPORTED_DSU cars use the AEB message for long):
+    #  - smartDSU inline at the DSU: it blocks the DSU's ACC_CONTROL so openpilot's is the only one on the bus, and
+    #    announces itself with 0x2FF. The DSU stays, so no stand-in messages and AEB keeps working.
+    #  - DSU disconnected (absent from the fw query): openpilot also stands in for it (STATIC_DSU_MSGS).
+    dsu_does_long = not (ret.flags & (ToyotaFlags.NO_DSU | ToyotaFlags.UNSUPPORTED_DSU))
+    if 0x2FF in fingerprint[0] and dsu_does_long:
+      ret.flags |= ToyotaFlags.SMART_DSU.value
+    use_sdsu = bool(ret.flags & ToyotaFlags.SMART_DSU)
+    ret.enableDsu = len(found_ecus) > 0 and Ecu.dsu not in found_ecus and dsu_does_long and not use_sdsu
 
     if Ecu.hybrid in found_ecus:
       ret.flags |= ToyotaFlags.HYBRID.value
@@ -105,12 +111,12 @@ class CarInterface(CarInterfaceBase):
         ret.flags |= ToyotaFlags.DISABLE_RADAR.value
 
     # openpilot longitudinal enabled by default:
-    #  - TSS-P cars with the DSU disconnected
+    #  - TSS-P cars with a smartDSU installed or the DSU disconnected
     #  - TSS2 cars with camera sending ACC_CONTROL where we can block it
     # openpilot longitudinal behind alpha long toggle:
     #  - TSS2 radar ACC cars (disables radar)
 
-    ret.openpilotLongitudinalControl = (ret.enableDsu or
+    ret.openpilotLongitudinalControl = (use_sdsu or ret.enableDsu or
                                         (bool(ret.flags & ToyotaFlags.TSS2) and not (ret.flags & ToyotaFlags.RADAR_ACC)) or
                                         bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value))
 

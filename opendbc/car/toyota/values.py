@@ -63,6 +63,9 @@ class ToyotaSafetyFlags(IntFlag):
 class ToyotaFlags(IntFlag):
   # Detected flags
   HYBRID = 1
+  # a smartDSU (comma's, or a clone such as the C-SDSU) is inline at the DSU and blocks its ACC_CONTROL,
+  # so openpilot does the longitudinal control while the DSU keeps doing AEB. Announces itself with 0x2FF.
+  SMART_DSU = 2
   DISABLE_RADAR = 4
 
   # Static flags
