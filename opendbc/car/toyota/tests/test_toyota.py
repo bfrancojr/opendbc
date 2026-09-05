@@ -204,6 +204,17 @@ class TestToyotaDisconnectedDsu(unittest.TestCase):
     static = {addr for addr, cars, _, _, _ in STATIC_DSU_MSGS if CAR.TOYOTA_SIENNA in cars}
     assert 0x343 in sent and not (static & sent), sorted(map(hex, sent))  # the real DSU is still there
 
+  def test_stop_timer_cars_stay_stock(self):
+    # TSS-P cars that need a resume press after a stop (no NO_STOP_TIMER flag) don't get openpilot longitudinal:
+    # the standstill request handling they need was removed upstream in #3076 and is not restored here
+    assert not (CAR.TOYOTA_COROLLA.config.flags & ToyotaFlags.NO_STOP_TIMER)
+    for kwargs in ({"ecus": self.WITHOUT_DSU}, {"ecus": self.WITH_DSU, "smart_dsu": True}):
+      CP = self.params(CAR.TOYOTA_COROLLA, **kwargs)
+      assert not CP.enableDsu and not (CP.flags & ToyotaFlags.SMART_DSU) and not CP.openpilotLongitudinalControl, kwargs
+      assert CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL
+    assert CAR.TOYOTA_SIENNA.config.flags & ToyotaFlags.NO_STOP_TIMER
+    assert all(c.config.flags & ToyotaFlags.NO_STOP_TIMER for c in cars_with(ToyotaFlags.TSS2))
+
   def test_smart_dsu_ignored_where_the_dsu_does_not_do_long(self):
     CP = self.params(CAR.TOYOTA_RAV4_TSS2, self.WITHOUT_DSU, smart_dsu=True)
     assert not (CP.flags & ToyotaFlags.SMART_DSU) and CP.openpilotLongitudinalControl  # camera-based long, as before

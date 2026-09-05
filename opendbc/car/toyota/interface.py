@@ -58,7 +58,9 @@ class CarInterface(CarInterfaceBase):
     #  - smartDSU inline at the DSU: it blocks the DSU's ACC_CONTROL so openpilot's is the only one on the bus, and
     #    announces itself with 0x2FF. The DSU stays, so no stand-in messages and AEB keeps working.
     #  - DSU disconnected (absent from the fw query): openpilot also stands in for it (STATIC_DSU_MSGS).
-    dsu_does_long = not (ret.flags & (ToyotaFlags.NO_DSU | ToyotaFlags.UNSUPPORTED_DSU))
+    # Only cars that can stay engaged at a stop without a resume press (NO_STOP_TIMER): the standstill request
+    # handling the other TSS-P cars need was removed upstream in #3076 and is not restored here.
+    dsu_does_long = not (ret.flags & (ToyotaFlags.NO_DSU | ToyotaFlags.UNSUPPORTED_DSU)) and bool(ret.flags & ToyotaFlags.NO_STOP_TIMER)
     if 0x2FF in fingerprint[0] and dsu_does_long:
       ret.flags |= ToyotaFlags.SMART_DSU.value
     use_sdsu = bool(ret.flags & ToyotaFlags.SMART_DSU)
@@ -120,7 +122,7 @@ class CarInterface(CarInterfaceBase):
                                         (bool(ret.flags & ToyotaFlags.TSS2) and not (ret.flags & ToyotaFlags.RADAR_ACC)) or
                                         bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value))
 
-    ret.autoResumeSng = ret.openpilotLongitudinalControl
+    ret.autoResumeSng = ret.openpilotLongitudinalControl and bool(ret.flags & ToyotaFlags.NO_STOP_TIMER)
 
     if not ret.openpilotLongitudinalControl:
       ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
