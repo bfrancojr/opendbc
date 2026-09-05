@@ -54,6 +54,10 @@ class CarInterface(CarInterfaceBase):
     # In TSS2 cars, the camera does long control
     found_ecus = [fw.ecu for fw in car_fw]
 
+    # TSS-P cars: openpilot takes over longitudinal when the DSU is disconnected (absent from the fw query).
+    # TSS2 cars have no DSU (the camera does long) and UNSUPPORTED_DSU cars use the AEB message for long.
+    ret.enableDsu = len(found_ecus) > 0 and Ecu.dsu not in found_ecus and not (ret.flags & (ToyotaFlags.NO_DSU | ToyotaFlags.UNSUPPORTED_DSU))
+
     if Ecu.hybrid in found_ecus:
       ret.flags |= ToyotaFlags.HYBRID.value
 
@@ -81,6 +85,10 @@ class CarInterface(CarInterfaceBase):
       # TODO: Some of these platforms are not advertised to have full range ACC, do they really all have sng?
       stop_and_go = True
 
+    # these models are speculated to do stop and go with the DSU unplugged; don't list it in the docs
+    if ret.flags & ToyotaFlags.SNG_WITHOUT_DSU:
+      stop_and_go = stop_and_go or (ret.enableDsu and not docs)
+
     ret.centerToFront = ret.wheelbase * 0.44
 
     # TODO: Some TSS-P platforms have BSM, but are flipped based on region or driving direction.
@@ -97,11 +105,13 @@ class CarInterface(CarInterfaceBase):
         ret.flags |= ToyotaFlags.DISABLE_RADAR.value
 
     # openpilot longitudinal enabled by default:
+    #  - TSS-P cars with the DSU disconnected
     #  - TSS2 cars with camera sending ACC_CONTROL where we can block it
     # openpilot longitudinal behind alpha long toggle:
     #  - TSS2 radar ACC cars (disables radar)
 
-    ret.openpilotLongitudinalControl = ((bool(ret.flags & ToyotaFlags.TSS2) and not (ret.flags & ToyotaFlags.RADAR_ACC)) or
+    ret.openpilotLongitudinalControl = (ret.enableDsu or
+                                        (bool(ret.flags & ToyotaFlags.TSS2) and not (ret.flags & ToyotaFlags.RADAR_ACC)) or
                                         bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value))
 
     ret.autoResumeSng = ret.openpilotLongitudinalControl

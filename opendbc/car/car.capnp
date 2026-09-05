@@ -514,6 +514,7 @@ struct CarParams {
   steerActuatorDelay @36 :Float32; # Steering wheel actuator delay in seconds
   longitudinalActuatorDelay @58 :Float32; # Gas/Brake actuator delay in seconds
   openpilotLongitudinalControl @37 :Bool; # is openpilot doing the longitudinal control?
+  enableDsu @5 :Bool;                    # Toyota TSS-P: DSU disconnected, openpilot does the longitudinal control
   carVin @38 :Text; # VIN number queried during fingerprinting
   dashcamOnly @41: Bool;
   passive @73: Bool;   # is openpilot in control?
@@ -750,7 +751,6 @@ struct CarParams {
     longitudinalActuatorDelayLowerBound @61 :Float32;
     stoppingControl @31 :Bool; # Does the car allow full control even at lows speeds when stopping
     radarTimeStep @45: Float32 = 0.05;  # time delta between radar updates, 20Hz is very standard
-    enableDsu @5 :Bool;        # driving support unit
     vEgoStarting @59 :Float32; # Speed at which the car goes into starting state
     startAccel @32 :Float32; # Required acceleration to get car moving
     startingState @70 :Bool; # Does this car make use of special starting state

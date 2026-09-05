@@ -1,10 +1,11 @@
 import unittest
 
-from opendbc.car import Bus
+from opendbc.car import Bus, DT_CTRL, gen_empty_fingerprint, structs
+from opendbc.car.car_helpers import interfaces
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
-from opendbc.car.toyota.values import CAR, DBC, ToyotaFlags, FW_QUERY_CONFIG, PLATFORM_CODE_ECUS, \
+from opendbc.car.toyota.values import CAR, DBC, MIN_ACC_SPEED, STATIC_DSU_MSGS, ToyotaFlags, ToyotaSafetyFlags, FW_QUERY_CONFIG, PLATFORM_CODE_ECUS, \
                                                   FUZZY_EXCLUDED_PLATFORMS, get_platform_codes
 from opendbc.testing import fuzzy_test
 
@@ -166,3 +167,56 @@ class TestToyotaFingerprint(unittest.TestCase):
         platforms_with_shared_codes |= {str(platform), *matches}
 
     assert platforms_with_shared_codes == FUZZY_EXCLUDED_PLATFORMS, (len(platforms_with_shared_codes), len(FW_VERSIONS))
+
+
+class TestToyotaDisconnectedDsu(unittest.TestCase):
+  """openpilot longitudinal on TSS-P cars when the DSU is unplugged (restored from commaai/opendbc#2931).
+  The decision is made from the firmware query at every start: DSU answers -> stock longitudinal, DSU absent -> openpilot."""
+  WITH_DSU = [Ecu.engine, Ecu.eps, Ecu.abs, Ecu.fwdRadar, Ecu.fwdCamera, Ecu.dsu]
+  WITHOUT_DSU = [Ecu.engine, Ecu.eps, Ecu.abs, Ecu.fwdRadar, Ecu.fwdCamera]
+
+  @staticmethod
+  def params(platform, ecus, docs=False):
+    car_fw = [CarParams.CarFw(ecu=ecu, fwVersion=b"", address=0x700, subAddress=0, brand="toyota") for ecu in ecus]
+    return interfaces[platform].get_params(platform, gen_empty_fingerprint(), car_fw, False, True, docs)
+
+  def test_sienna_dsu_unplugged_openpilot_longitudinal(self):
+    CP = self.params(CAR.TOYOTA_SIENNA, self.WITHOUT_DSU)
+    assert CP.enableDsu and CP.openpilotLongitudinalControl and CP.autoResumeSng
+    assert not (CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
+    assert CP.minEnableSpeed < 0
+
+  def test_sienna_dsu_present_stock_longitudinal(self):
+    CP = self.params(CAR.TOYOTA_SIENNA, self.WITH_DSU)
+    assert not CP.enableDsu and not CP.openpilotLongitudinalControl
+    assert CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL
+
+  def test_no_firmware_means_stock(self):
+    # docs generation and a failed fw query must not claim the DSU is gone
+    CP = self.params(CAR.TOYOTA_SIENNA, [])
+    assert not CP.enableDsu and not CP.openpilotLongitudinalControl
+
+  def test_tss2_and_unsupported_dsu_unaffected(self):
+    CP = self.params(CAR.TOYOTA_RAV4_TSS2, self.WITHOUT_DSU)
+    assert not CP.enableDsu and CP.openpilotLongitudinalControl  # camera-based long, as before
+    CP = self.params(CAR.LEXUS_IS, self.WITHOUT_DSU)
+    assert not CP.enableDsu and not CP.openpilotLongitudinalControl
+
+  def test_sng_without_dsu_flag(self):
+    assert abs(self.params(CAR.TOYOTA_RAV4H, self.WITH_DSU).minEnableSpeed - MIN_ACC_SPEED) < 1e-3  # capnp stores Float32
+    assert self.params(CAR.TOYOTA_RAV4H, self.WITHOUT_DSU).minEnableSpeed < 0
+    assert abs(self.params(CAR.TOYOTA_RAV4H, self.WITHOUT_DSU, docs=True).minEnableSpeed - MIN_ACC_SPEED) < 1e-3
+
+  def test_static_dsu_msgs_only_when_dsu_unplugged(self):
+    expected = {addr for addr, cars, _, _, _ in STATIC_DSU_MSGS if CAR.TOYOTA_SIENNA in cars}
+    assert expected
+    for ecus, should_send in ((self.WITHOUT_DSU, True), (self.WITH_DSU, False)):
+      CI = interfaces[CAR.TOYOTA_SIENNA](self.params(CAR.TOYOTA_SIENNA, ecus))
+      CC = structs.CarControl().as_reader()
+      sent = set()
+      for frame in range(100):
+        CI.update([])
+        _, can_sends = CI.apply(CC, int(frame * DT_CTRL * 1e9))
+        sent |= {msg[0] for msg in can_sends}  # (address, data, bus)
+      assert (expected <= sent) == should_send, (ecus, sorted(map(hex, sent)))
+      assert (0x343 in sent) == should_send  # ACC_CONTROL only when openpilot does long
