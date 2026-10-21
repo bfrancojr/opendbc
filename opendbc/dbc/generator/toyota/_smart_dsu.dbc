@@ -1,0 +1,13 @@
+BO_ 767 SDSU: 4 XXX
+ SG_ FD_BUTTON : 7|1@0+ (1,0) [0|1] "" XXX
+ SG_ CTRL_MODE : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ STATE : 23|4@0+ (1,0) [0|15] "" XXX
+ SG_ COUNTER : 19|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 31|8@0+ (1,0) [0|255] "" XXX
+
+CM_ "BO_ SDSU: Status from a smartDSU, a gateway inline at the DSU of a TSS-P Toyota that blocks the DSU's ACC_CONTROL so openpilot can send its own. Layout from the RetroPilot firmware (https://github.com/RetroPilot/ocelot/tree/main/firmware/smart_dsu), 4 bytes at 50 Hz; the BearTech C-SDSU sends the same.";
+CM_ SG_ 767 FD_BUTTON "The follow distance button, wired to the DSU, as forwarded by the smartDSU";
+CM_ SG_ 767 CTRL_MODE "Bit 0: 0xF10 ACC control seen, bit 1: 0xF11 AEB control seen";
+CM_ SG_ 767 STATE "FAULT_TIMEOUT is also the normal state while openpilot sends ACC_CONTROL: the DSU's copy is blocked, so its timer runs out";
+
+VAL_ 767 STATE 7 "STATE_AEB_CTRL" 6 "FAULT_INVALID" 5 "FAULT_TIMEOUT" 4 "FAULT_STARTUP" 3 "FAULT_SCE" 2 "FAULT_SEND" 1 "FAULT_BAD_CHECKSUM" 0 "NO_FAULT" ;

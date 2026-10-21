@@ -204,6 +204,30 @@ class TestToyotaDisconnectedDsu(unittest.TestCase):
     static = {addr for addr, cars, _, _, _ in STATIC_DSU_MSGS if CAR.TOYOTA_SIENNA in cars}
     assert 0x343 in sent and not (static & sent), sorted(map(hex, sent))  # the real DSU is still there
 
+  @staticmethod
+  def sdsu_frame(counter, button, state=5, bad_checksum=False):
+    # layout as the RetroPilot firmware and the BearTech C-SDSU send it: button, ctrl mode, state|counter, checksum
+    dat = bytearray([button << 7, 0, (state << 4) | (counter & 0xF), 0])
+    dat[3] = (len(dat) + 0x2FF % 256 + (0x2FF >> 8) + sum(dat[:3]) + bad_checksum) & 0xFF
+    return 0x2FF, bytes(dat), 0
+
+  def gap_presses(self, CP, buttons, bad_checksum=False):
+    CI = interfaces[CP.carFingerprint](CP)
+    events = []
+    for i, button in enumerate(buttons):
+      cs = CI.update([(int(i * 0.02 * 1e9), [self.sdsu_frame(i, button, bad_checksum=bad_checksum)])])
+      events += [b.pressed for b in cs.buttonEvents if b.type == structs.CarState.ButtonEvent.Type.gapAdjustCruise]
+    return events
+
+  def test_smart_dsu_distance_button(self):
+    # the distance button is wired to the DSU on TSS-P; with a smartDSU openpilot can only see it in 0x2FF
+    buttons = [0] * 5 + [1] * 5 + [0] * 5 + [1] * 5 + [0] * 5
+    CP = self.params(CAR.TOYOTA_SIENNA, self.WITH_DSU, smart_dsu=True)
+    assert self.gap_presses(CP, buttons) == [True, False, True, False]
+    assert self.gap_presses(CP, buttons, bad_checksum=True) == []
+    # no smartDSU flag (stock longitudinal), no distance button from 0x2FF
+    assert self.gap_presses(self.params(CAR.TOYOTA_SIENNA, self.WITH_DSU), buttons) == []
+
   def test_stop_timer_cars_stay_stock(self):
     # TSS-P cars that need a resume press after a stop (no NO_STOP_TIMER flag) don't get openpilot longitudinal:
     # the standstill request handling they need was removed upstream in #3076 and is not restored here

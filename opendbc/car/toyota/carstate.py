@@ -198,6 +198,13 @@ class CarState(CarStateBase):
 
         buttonEvents += create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
 
+    elif self.CP.flags & ToyotaFlags.SMART_DSU:
+      # TSS-P: the distance button is wired to the DSU, and the smartDSU in front of it forwards the button in 0x2FF
+      prev_distance_button = self.distance_button
+      self.distance_button = cp.vl["SDSU"]["FD_BUTTON"]
+
+      buttonEvents += create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
+
     ret.buttonEvents = buttonEvents
     return ret
 
