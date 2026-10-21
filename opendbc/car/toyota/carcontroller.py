@@ -39,8 +39,10 @@ def get_long_tune(CP, params):
     kiBP = [2., 5.]
     kiV = [0.5, 0.25]
   else:
+    # TSS-P: halved like TSS2 was when the future-aEgo error went in (#1559), which these gains predate. At the old
+    # values the integral drove a ~0.7 Hz gas/brake cycle at steady highway speed on a smartDSU Sienna.
     kiBP = [0., 5., 35.]
-    kiV = [3.6, 2.4, 1.5]
+    kiV = [1.8, 1.2, 0.75]
 
   return PIDController(0.0, (kiBP, kiV), k_f=1.0,
                        pos_limit=params.ACCEL_MAX, neg_limit=params.ACCEL_MIN,
