@@ -249,6 +249,30 @@ class TestToyotaDisconnectedDsu(unittest.TestCase):
     for car in (CAR.TOYOTA_RAV4_TSS2, CAR.TOYOTA_COROLLA):  # TSS2 and stop-timer cars still report it
       assert self.cruise_standstill(self.params(car, self.WITHOUT_DSU)), car
 
+  def permit_braking(self, CP, speed_kph, accel, frames=300):
+    CI = interfaces[CP.carFingerprint](CP)
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+    wheels = {f"WHEEL_SPEED_{w}": speed_kph for w in ("FL", "FR", "RL", "RR")}
+    permit = None
+    for i in range(frames):
+      CC = structs.CarControl(enabled=True, longActive=True)
+      CC.actuators.accel = 0. if i < frames // 2 else accel  # hold speed first, then the request
+      CC.actuators.longControlState = structs.CarControl.Actuators.LongControlState.pid
+      CI.update([(int(i * DT_CTRL * 1e9), [packer.make_can_msg("WHEEL_SPEEDS", 0, wheels)])])
+      _, can_sends = CI.apply(CC.as_reader(), int(i * DT_CTRL * 1e9))
+      permit = next((bool(dat[3] >> 6 & 1) for addr, dat, bus in can_sends if addr == 0x343), permit)
+    return permit
+
+  def test_tssp_coast_band(self):
+    # At cruise speed the stock DSU withholds PERMIT_BRAKING on small slowdown requests and the car coasts; openpilot
+    # permitted braking below +0.2 m/s^2, so a -0.1..-0.4 integral swing at set speed became 0.1-0.7 s brake taps
+    # (Sienna smartDSU, 2026-10-22). Measured falsifier if this ever regresses: brake taps per minute at steady cruise.
+    sienna = self.params(CAR.TOYOTA_SIENNA, self.WITH_DSU, smart_dsu=True)
+    assert not self.permit_braking(sienna, 80, -0.2)  # 50 mph, small request: coast
+    assert self.permit_braking(sienna, 80, -0.6)  # a real slowdown still brakes
+    assert self.permit_braking(sienna, 20, -0.2)  # low speed and stops as before
+    assert self.permit_braking(self.params(CAR.TOYOTA_RAV4_TSS2, self.WITHOUT_DSU), 80, -0.2)  # TSS2 unchanged
+
   def test_stop_timer_cars_stay_stock(self):
     # TSS-P cars that need a resume press after a stop (no NO_STOP_TIMER flag) don't get openpilot longitudinal:
     # the standstill request handling they need was removed upstream in #3076 and is not restored here

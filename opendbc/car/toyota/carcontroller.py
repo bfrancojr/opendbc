@@ -25,6 +25,12 @@ ACCEL_PID_UNWIND = 0.03 * DT_CTRL * 3  # m/s^2 / frame
 
 MAX_PITCH_COMPENSATION = 1.5  # m/s^2
 
+# TSS-P at cruise speed: brakes only for a clear slowdown request, coast on small ones like the stock DSU does
+# (measured on a Sienna: the DSU withholds PERMIT_BRAKING 69 % of the time above 40 mph and never brakes without it)
+COAST_BAND_BP = [10., 15.]  # m/s
+PERMIT_BRAKING_ON = [0.2, -0.3]  # net accel request below which braking is permitted, m/s^2
+PERMIT_BRAKING_OFF = [0.3, -0.1]  # and above which it is withdrawn
+
 # LKA limits
 # EPS faults if you apply torque while the steering rate is above 100 deg/s for too long
 MAX_STEER_RATE = 100  # deg/s
@@ -222,11 +228,17 @@ class CarController(CarControllerBase):
         future_t = float(np.interp(CS.out.vEgo, [2., 5.], [0.25, 0.5]))
         a_ego_future = a_ego_blended + j_ego * future_t
 
+        coast_band = not self.CP.flags & ToyotaFlags.TSS2 and CS.out.vEgo > COAST_BAND_BP[0]
+
         if CC.longActive:
           # constantly slowly unwind integral to recover from large temporary errors
           self.long_pid.i -= ACCEL_PID_UNWIND * float(np.sign(self.long_pid.i))
 
           error_future = pcm_accel_cmd - a_ego_future
+          # coasting without brakes the car can't follow a small negative request: hold the integral (it still unwinds
+          # above) rather than let it wind toward braking. Holding only that direction ratchets it up toward gas.
+          # A real slowdown comes from the planner's target instead
+          coasting = coast_band and not self.permit_braking and pcm_accel_cmd < 0
 
           if not stopping:
             # Toyota's PCM slowly responds to changes in pitch. On change, we amplify our
@@ -238,16 +250,20 @@ class CarController(CarControllerBase):
           pcm_accel_cmd = self.long_pid.update(error_future,
                                                speed=CS.out.vEgo,
                                                feedforward=pcm_accel_cmd,
-                                               freeze_integrator=actuators.longControlState != LongCtrlState.pid)
+                                               freeze_integrator=actuators.longControlState != LongCtrlState.pid or coasting)
         else:
           self.long_pid.reset()
 
         # Along with rate limiting positive jerk above, this greatly improves gas response time
         # Consider the net acceleration request that the PCM should be applying (pitch included)
         net_acceleration_request_min = min(actuators.accel + accel_due_to_pitch, net_acceleration_request)
-        if net_acceleration_request_min < 0.2 or stopping or not CC.longActive:
+        permit_on, permit_off = 0.2, 0.3
+        if coast_band:
+          permit_on = float(np.interp(CS.out.vEgo, COAST_BAND_BP, PERMIT_BRAKING_ON))
+          permit_off = float(np.interp(CS.out.vEgo, COAST_BAND_BP, PERMIT_BRAKING_OFF))
+        if net_acceleration_request_min < permit_on or stopping or not CC.longActive:
           self.permit_braking = True
-        elif net_acceleration_request_min > 0.3:
+        elif net_acceleration_request_min > permit_off:
           self.permit_braking = False
 
         pcm_accel_cmd = float(np.clip(pcm_accel_cmd, self.params.ACCEL_MIN, self.params.ACCEL_MAX))
