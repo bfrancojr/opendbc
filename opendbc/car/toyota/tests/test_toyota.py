@@ -1,5 +1,6 @@
 import unittest
 
+from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, gen_empty_fingerprint, structs
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.structs import CarParams
@@ -227,6 +228,26 @@ class TestToyotaDisconnectedDsu(unittest.TestCase):
     assert self.gap_presses(CP, buttons, bad_checksum=True) == []
     # no smartDSU flag (stock longitudinal), no distance button from 0x2FF
     assert self.gap_presses(self.params(CAR.TOYOTA_SIENNA, self.WITH_DSU), buttons) == []
+
+  def cruise_standstill(self, CP):
+    CI = interfaces[CP.carFingerprint](CP)
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+    cs = None
+    for i in range(10):
+      msg = packer.make_can_msg("PCM_CRUISE", 0, {"CRUISE_STATE": 7, "CRUISE_ACTIVE": 1})
+      cs = CI.update([(int(i * 0.03 * 1e9), [msg])])
+    assert cs.cruiseState.enabled  # the frame was parsed
+    return cs.cruiseState.standstill
+
+  def test_pcm_standstill_ignored_without_stop_timer(self):
+    # Measured on the Sienna with a smartDSU (2026-10-22, 7 held stops): with CRUISE_STATE 7 reported as
+    # cruiseState.standstill, longcontrol never leaves stopping, so accel stays <= 0 and RELEASE_STANDSTILL is never
+    # sent; the car waits for the driver's gas. Before #3076 these cars ignored state 7, the PCM resumes on an accel request.
+    for CP in (self.params(CAR.TOYOTA_SIENNA, self.WITH_DSU, smart_dsu=True), self.params(CAR.TOYOTA_SIENNA, self.WITHOUT_DSU),
+               self.params(CAR.TOYOTA_SIENNA, self.WITH_DSU)):
+      assert not self.cruise_standstill(CP)
+    for car in (CAR.TOYOTA_RAV4_TSS2, CAR.TOYOTA_COROLLA):  # TSS2 and stop-timer cars still report it
+      assert self.cruise_standstill(self.params(car, self.WITHOUT_DSU)), car
 
   def test_stop_timer_cars_stay_stock(self):
     # TSS-P cars that need a resume press after a stop (no NO_STOP_TIMER flag) don't get openpilot longitudinal:

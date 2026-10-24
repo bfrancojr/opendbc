@@ -163,7 +163,10 @@ class CarState(CarStateBase):
         ret.accFaulted = ret.accFaulted or cp.vl["PCM_CRUISE_2"]["LOW_SPEED_LOCKOUT"] == 2
 
     pcm_acc_status = cp.vl["PCM_CRUISE"]["CRUISE_STATE"]
-    ret.cruiseState.standstill = pcm_acc_status == 7
+    # ignore standstill state in certain vehicles, since pcm allows to restart with just an acceleration request
+    # (TSS-P cars without a stop timer, as before #3076; reporting it holds longcontrol in stopping until the driver presses gas)
+    if not (self.CP.flags & ToyotaFlags.NO_STOP_TIMER and not self.CP.flags & ToyotaFlags.TSS2):
+      ret.cruiseState.standstill = pcm_acc_status == 7
     ret.cruiseState.enabled = bool(cp.vl["PCM_CRUISE"]["CRUISE_ACTIVE"])
     ret.cruiseState.nonAdaptive = pcm_acc_status in (1, 2, 3, 4, 5, 6)
 
